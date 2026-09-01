@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
+import { supabase } from './lib/supabase'
 import './App.css'
 
 type Product = {
-  id: number
+  id: string | number
   name: string
   price: number
   category: string
@@ -39,17 +40,58 @@ function App() {
   const [category, setCategory] = useState('All')
   const [query, setQuery] = useState('')
   const [email, setEmail] = useState('')
+  const [dbProducts, setDbProducts] = useState<Product[]>([])
 
   useEffect(() => {
     localStorage.setItem('auren-cart', JSON.stringify(cart))
   }, [cart])
 
+  useEffect(() => {
+    let cancelled = false
+
+    const loadProducts = async () => {
+      const { data, error } = await supabase
+        .from('products')
+        .select('*')
+        .eq('active', true)
+        .order('created_at', { ascending: false })
+
+      if (cancelled) return
+
+      if (error) {
+        console.error('Failed to load products:', error)
+        return
+      }
+
+      const mapped: Product[] = (data ?? []).map((product) => ({
+        id: product.id,
+        name: product.name,
+        price: Number(product.price),
+        category: product.category ?? 'Uncategorised',
+        image: product.image_url ?? '',
+        tone: '',
+        sizes: ['S', 'M', 'L', 'XL'],
+        description: product.description ?? '',
+      }))
+
+      setDbProducts(mapped)
+    }
+
+    void loadProducts()
+
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  const sourceProducts = dbProducts.length > 0 ? dbProducts : products
+
   const visibleProducts = useMemo(
-    () => products.filter((p) =>
+    () => sourceProducts.filter((p) =>
       (category === 'All' || p.category === category) &&
       `${p.name} ${p.category}`.toLowerCase().includes(query.toLowerCase())
     ),
-    [query, category]
+    [query, category, sourceProducts]
   )
   const subtotal = useMemo(() => cart.reduce((sum, item) => sum + item.price * item.quantity, 0), [cart])
   const addToBag = (product: Product, size = product.sizes[0], qty = 1) => {
@@ -70,7 +112,7 @@ function App() {
     setQuantity(1)
   }
 
-  const changeQuantity = (id: number, size: string, delta: number) => {
+  const changeQuantity = (id: string | number, size: string, delta: number) => {
     setCart((items) => items
       .map((item) => item.id === id && item.size === size ? { ...item, quantity: Math.max(0, item.quantity + delta) } : item)
       .filter((item) => item.quantity > 0))
