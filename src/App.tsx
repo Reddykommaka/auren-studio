@@ -43,7 +43,7 @@ function App() {
   const [dbProducts, setDbProducts] = useState<Product[]>([])
   const [userEmail, setUserEmail] = useState<string | null>(null)
   const [authOpen, setAuthOpen] = useState(false)
-  const [authMode, setAuthMode] = useState<'signin' | 'signup'>('signin')
+  const [authMode, setAuthMode] = useState<'signin' | 'signup' | 'reset' | 'update'>('signin')
   const [authEmail, setAuthEmail] = useState('')
   const [authPassword, setAuthPassword] = useState('')
   const [authMessage, setAuthMessage] = useState('')
@@ -66,8 +66,16 @@ function App() {
     void loadSession()
 
     const { data: listener } = supabase.auth.onAuthStateChange(
-      (_event, session) => {
+      (event, session) => {
         setUserEmail(session?.user.email ?? null)
+
+        if (event === 'PASSWORD_RECOVERY') {
+          setAuthEmail(session?.user.email ?? '')
+          setAuthMode('update')
+          setAuthPassword('')
+          setAuthMessage('')
+          setAuthOpen(true)
+        }
       }
     )
 
@@ -119,6 +127,41 @@ function App() {
     event.preventDefault()
     setAuthLoading(true)
     setAuthMessage('')
+
+    if (authMode === 'reset') {
+      const { error } = await supabase.auth.resetPasswordForEmail(authEmail.trim(), {
+        redirectTo: `${window.location.origin}/`,
+      })
+
+      setAuthLoading(false)
+
+      if (error) {
+        console.error('AUREN PASSWORD RESET ERROR:', error)
+        setAuthMessage(error.message)
+        return
+      }
+
+      setAuthMessage('Password reset link sent. Check your email.')
+      return
+    }
+
+    if (authMode === 'update') {
+      const { error } = await supabase.auth.updateUser({
+        password: authPassword,
+      })
+
+      setAuthLoading(false)
+
+      if (error) {
+        console.error('AUREN PASSWORD UPDATE ERROR:', error)
+        setAuthMessage(error.message)
+        return
+      }
+
+      setAuthMessage('Password updated successfully.')
+      setAuthPassword('')
+      return
+    }
 
     const result = authMode === 'signup'
       ? await supabase.auth.signUp({
@@ -239,7 +282,45 @@ function App() {
         <button onClick={() => setAuthOpen(false)}>Close</button>
       </div>
 
-      {userEmail ? (
+      {authMode === "update" ? (
+        <form className="auth-panel" onSubmit={submitAuth}>
+          <p className="eyebrow">ACCOUNT</p>
+          <h2>Choose a new password.</h2>
+          <p>Enter a new password for your AUREN account.</p>
+
+          <label>
+            New password
+            <input
+              type="password"
+              value={authPassword}
+              onChange={(e) => setAuthPassword(e.target.value)}
+              required
+              minLength={6}
+              autoComplete="new-password"
+              autoFocus
+            />
+          </label>
+
+          {authMessage && <p className="auth-message" role="status">{authMessage}</p>}
+
+          <button className="cta cta-dark" type="submit" disabled={authLoading}>
+            {authLoading ? "Please wait…" : "Update password"} <Arrow />
+          </button>
+
+          <button
+            className="auth-switch"
+            type="button"
+            onClick={() => {
+              setAuthMode("signin")
+              setAuthMessage("")
+              setAuthPassword("")
+              setAuthOpen(true)
+            }}
+          >
+            Back to sign in
+          </button>
+        </form>
+      ) : userEmail ? (
         <div className="auth-panel">
           <p className="eyebrow">ACCOUNT</p>
           <h2>{userEmail}</h2>
@@ -249,48 +330,104 @@ function App() {
       ) : (
         <form className="auth-panel" onSubmit={submitAuth}>
           <p className="eyebrow">ACCOUNT</p>
-          <h2>{authMode === "signin" ? "Welcome back." : "Begin with AUREN."}</h2>
-          <p>{authMode === "signin" ? "Sign in to continue." : "Create an account to save your details and orders."}</p>
+          <h2>
+            {authMode === "signin"
+              ? "Welcome back."
+              : authMode === "signup"
+                ? "Begin with AUREN."
+                : authMode === "reset"
+                  ? "Reset your password."
+                  : "Choose a new password."}
+          </h2>
+          <p>
+            {authMode === "signin"
+              ? "Sign in to continue."
+              : authMode === "signup"
+                ? "Create an account to save your details and orders."
+                : authMode === "reset"
+                  ? "Enter your email and we'll send you a secure reset link."
+                  : "Enter a new password for your AUREN account."}
+          </p>
 
-          <label>
-            Email
-            <input
-              type="email"
-              value={authEmail}
-              onChange={(e) => setAuthEmail(e.target.value)}
-              required
-              autoComplete="email"
-            />
-          </label>
+          {(authMode === "signin" || authMode === "signup" || authMode === "reset") && (
+            <label>
+              Email
+              <input
+                type="email"
+                value={authEmail}
+                onChange={(e) => setAuthEmail(e.target.value)}
+                required
+                autoComplete="email"
+              />
+            </label>
+          )}
 
-          <label>
-            Password
-            <input
-              type="password"
-              value={authPassword}
-              onChange={(e) => setAuthPassword(e.target.value)}
-              required
-              minLength={6}
-              autoComplete={authMode === "signin" ? "current-password" : "new-password"}
-            />
-          </label>
+          {(authMode === "signin" || authMode === "signup") && (
+            <label>
+              Password
+              <input
+                type="password"
+                value={authPassword}
+                onChange={(e) => setAuthPassword(e.target.value)}
+                required
+                minLength={6}
+                autoComplete={authMode === "signin" ? "current-password" : "new-password"}
+              />
+            </label>
+          )}
 
           {authMessage && <p className="auth-message" role="status">{authMessage}</p>}
 
           <button className="cta cta-dark" type="submit" disabled={authLoading}>
-            {authLoading ? "Please wait…" : authMode === "signin" ? "Sign in" : "Create account"} <Arrow />
+            {authLoading
+              ? "Please wait…"
+              : authMode === "signin"
+                ? "Sign in"
+                : authMode === "signup"
+                  ? "Create account"
+                  : authMode === "reset"
+                    ? "Send reset link"
+                    : "Update password"} <Arrow />
           </button>
 
-          <button
-            className="auth-switch"
-            type="button"
-            onClick={() => {
-              setAuthMode(authMode === "signin" ? "signup" : "signin")
-              setAuthMessage("")
-            }}
-          >
-            {authMode === "signin" ? "Create an account" : "Already have an account? Sign in"}
-          </button>
+          {authMode === "signin" && (
+            <button
+              className="auth-switch"
+              type="button"
+              onClick={() => {
+                setAuthMode("reset")
+                setAuthMessage("")
+              }}
+            >
+              Forgot password?
+            </button>
+          )}
+
+          {authMode === "reset" && (
+            <button
+              className="auth-switch"
+              type="button"
+              onClick={() => {
+                setAuthMode("signin")
+                setAuthMessage("")
+              }}
+            >
+              Back to sign in
+            </button>
+          )}
+
+          {(authMode === "signin" || authMode === "signup") && (
+            <button
+              className="auth-switch"
+              type="button"
+              onClick={() => {
+                setAuthMode(authMode === "signin" ? "signup" : "signin")
+                setAuthMessage("")
+              }}
+            >
+              {authMode === "signin" ? "Create an account" : "Already have an account? Sign in"}
+            </button>
+          )}
         </form>
       )}
     </div>}
