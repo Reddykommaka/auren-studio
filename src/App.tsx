@@ -41,10 +41,41 @@ function App() {
   const [query, setQuery] = useState('')
   const [email, setEmail] = useState('')
   const [dbProducts, setDbProducts] = useState<Product[]>([])
+  const [userEmail, setUserEmail] = useState<string | null>(null)
+  const [authOpen, setAuthOpen] = useState(false)
+  const [authMode, setAuthMode] = useState<'signin' | 'signup'>('signin')
+  const [authEmail, setAuthEmail] = useState('')
+  const [authPassword, setAuthPassword] = useState('')
+  const [authMessage, setAuthMessage] = useState('')
+  const [authLoading, setAuthLoading] = useState(false)
+  const [paymentLoading, setPaymentLoading] = useState(false)
+  const [paymentMessage, setPaymentMessage] = useState('')
 
   useEffect(() => {
     localStorage.setItem('auren-cart', JSON.stringify(cart))
   }, [cart])
+
+  useEffect(() => {
+    let mounted = true
+
+    const loadSession = async () => {
+      const { data } = await supabase.auth.getSession()
+      if (mounted) setUserEmail(data.session?.user.email ?? null)
+    }
+
+    void loadSession()
+
+    const { data: listener } = supabase.auth.onAuthStateChange(
+      (_event, session) => {
+        setUserEmail(session?.user.email ?? null)
+      }
+    )
+
+    return () => {
+      mounted = false
+      listener.subscription.unsubscribe()
+    }
+  }, [])
 
   useEffect(() => {
     let cancelled = false
@@ -83,6 +114,71 @@ function App() {
       cancelled = true
     }
   }, [])
+
+  const submitAuth = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    setAuthLoading(true)
+    setAuthMessage('')
+
+    const result = authMode === 'signup'
+      ? await supabase.auth.signUp({
+          email: authEmail.trim(),
+          password: authPassword,
+        })
+      : await supabase.auth.signInWithPassword({
+          email: authEmail.trim(),
+          password: authPassword,
+        })
+
+    setAuthLoading(false)
+
+    if (result.error) {
+      console.error('AUREN AUTH ERROR:', result.error)
+      setAuthMessage(result.error.message)
+      return
+    }
+
+    console.log('AUREN AUTH RESULT:', result.data)
+
+    if (authMode === 'signup') {
+      setAuthMessage('Account created. Check your email to confirm your address.')
+      return
+    }
+
+    setAuthMessage('Signed in successfully.')
+    setAuthOpen(false)
+    setAuthPassword('')
+  }
+
+  const startPayment = async () => {
+    if (subtotal <= 0 || paymentLoading) return
+    setPaymentLoading(true)
+    setPaymentMessage('')
+    try {
+      const { data, error } = await supabase.functions.invoke('create-razorpay-order', { body: { amount: subtotal } })
+      if (error || !data?.orderId || !data?.keyId) throw new Error(error?.message || data?.error || 'Unable to start checkout')
+      if (!window.Razorpay) throw new Error('Payment checkout is still loading. Please try again.')
+      const checkout = new window.Razorpay({
+        key: data.keyId, amount: data.amount, currency: data.currency || 'INR', name: 'AUREN',
+        description: 'AUREN Studio order', order_id: data.orderId, prefill: userEmail ? { email: userEmail } : undefined,
+        theme: { color: '#171614' },
+        handler: async (response) => {
+          const result = await supabase.functions.invoke('verify-razorpay-payment', { body: response })
+          if (result.error || !result.data?.verified) { setPaymentMessage(result.error?.message || result.data?.error || 'Payment could not be verified.'); return }
+          setCart([]); setCartOpen(false); setPaymentMessage('Payment successful. Your AUREN order is confirmed.')
+        },
+      })
+      checkout.open()
+    } catch (error) {
+      console.error('AUREN PAYMENT ERROR:', error)
+      setPaymentMessage(error instanceof Error ? error.message : 'Unable to start payment.')
+    } finally { setPaymentLoading(false) }
+  }
+
+  const signOut = async () => {
+    await supabase.auth.signOut()
+    setAuthMessage('')
+  }
 
   const sourceProducts = dbProducts.length > 0 ? dbProducts : products
 
@@ -130,12 +226,74 @@ function App() {
       <button className="menu-trigger" onClick={() => setMenuOpen(true)} aria-label="Open menu"><i /><i /></button>
       <a className="wordmark" href="#top">AUREN</a>
       <nav className="main-nav" aria-label="Primary"><a href="#shop">Shop</a><a href="#collections">Collections</a><a href="#story">Journal</a><a href="#about">About</a></nav>
-      <div className="header-tools"><button onClick={() => setSearchOpen(true)} aria-label="Open search">Search</button><button onClick={() => setCartOpen(true)} aria-label="Open shopping bag">Bag ({cartCount})</button></div>
+      <div className="header-tools"><button onClick={() => setSearchOpen(true)} aria-label="Open search">Search</button><button onClick={() => setAuthOpen(true)} aria-label="Open account">{userEmail ? 'Account' : 'Sign in'}</button><button onClick={() => setCartOpen(true)} aria-label="Open shopping bag">Bag ({cartCount})</button></div>
     </header>
 
     {menuOpen && <div className="mobile-menu" role="dialog" aria-modal="true" aria-label="Menu"><button className="close" onClick={() => setMenuOpen(false)}>Close</button><div className="mobile-logo">AUREN</div><nav><a href="#shop" onClick={() => setMenuOpen(false)}>Shop</a><a href="#collections" onClick={() => setMenuOpen(false)}>Collections</a><a href="#story" onClick={() => setMenuOpen(false)}>Journal</a><a href="#about" onClick={() => setMenuOpen(false)}>About</a></nav><p>Contemporary essentials, considered carefully.</p></div>}
 
     {searchOpen && <div className="search-screen" role="dialog" aria-modal="true" aria-label="Search"><div className="search-top"><span>Search AUREN</span><button onClick={() => setSearchOpen(false)}>Close</button></div><input autoFocus value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search products..." aria-label="Search products"/><p>{query ? `${visibleProducts.length} result${visibleProducts.length === 1 ? '' : 's'}` : 'Try “shirt”, “outerwear” or “essentials”.'}</p><div className="search-results">{query && visibleProducts.map((p) => <button key={p.id} onClick={() => { addToBag(p); setSearchOpen(false) }}>{p.name}<span>{money(p.price)}</span></button>)}</div></div>}
+
+    {authOpen && <div className="search-screen auth-screen" role="dialog" aria-modal="true" aria-label="Account">
+      <div className="search-top">
+        <span>{userEmail ? "Your AUREN account" : authMode === "signin" ? "Sign in to AUREN" : "Create your AUREN account"}</span>
+        <button onClick={() => setAuthOpen(false)}>Close</button>
+      </div>
+
+      {userEmail ? (
+        <div className="auth-panel">
+          <p className="eyebrow">ACCOUNT</p>
+          <h2>{userEmail}</h2>
+          <p>Your account is ready. Order history and checkout will appear here as we complete the commerce layer.</p>
+          <button className="cta cta-dark" onClick={signOut}>Sign out <Arrow /></button>
+        </div>
+      ) : (
+        <form className="auth-panel" onSubmit={submitAuth}>
+          <p className="eyebrow">ACCOUNT</p>
+          <h2>{authMode === "signin" ? "Welcome back." : "Begin with AUREN."}</h2>
+          <p>{authMode === "signin" ? "Sign in to continue." : "Create an account to save your details and orders."}</p>
+
+          <label>
+            Email
+            <input
+              type="email"
+              value={authEmail}
+              onChange={(e) => setAuthEmail(e.target.value)}
+              required
+              autoComplete="email"
+            />
+          </label>
+
+          <label>
+            Password
+            <input
+              type="password"
+              value={authPassword}
+              onChange={(e) => setAuthPassword(e.target.value)}
+              required
+              minLength={6}
+              autoComplete={authMode === "signin" ? "current-password" : "new-password"}
+            />
+          </label>
+
+          {authMessage && <p className="auth-message" role="status">{authMessage}</p>}
+
+          <button className="cta cta-dark" type="submit" disabled={authLoading}>
+            {authLoading ? "Please wait…" : authMode === "signin" ? "Sign in" : "Create account"} <Arrow />
+          </button>
+
+          <button
+            className="auth-switch"
+            type="button"
+            onClick={() => {
+              setAuthMode(authMode === "signin" ? "signup" : "signin")
+              setAuthMessage("")
+            }}
+          >
+            {authMode === "signin" ? "Create an account" : "Already have an account? Sign in"}
+          </button>
+        </form>
+      )}
+    </div>}
 
     {selectedProduct && <div className="product-modal" role="dialog" aria-modal="true" aria-label={selectedProduct.name}>
       <button className="modal-backdrop" onClick={() => setSelectedProduct(null)} aria-label="Close product"></button>
@@ -174,7 +332,7 @@ function App() {
 
     <footer><div className="footer-top"><div className="footer-wordmark">AUREN</div><div className="footer-links"><div><b>SHOP</b><a href="#shop">New in</a><a href="#shop">Essentials</a><a href="#shop">Outerwear</a></div><div><b>ABOUT</b><a href="#about">Our story</a><a href="#story">Journal</a><a href="#about">Contact</a></div><div><b>HELP</b><a href="#about">Shipping</a><a href="#about">Returns</a><a href="#about">FAQ</a></div></div></div><div className="footer-bottom"><span>© 2026 AUREN STUDIO</span><span>Fictional portfolio concept</span></div></footer>
 
-    {cartOpen && <><button className="backdrop" onClick={() => setCartOpen(false)} aria-label="Close cart"></button><aside className="cart" aria-label="Shopping bag"><div className="cart-head"><h2>Your bag</h2><button onClick={() => setCartOpen(false)}>Close</button></div>{cart.length === 0 ? <div className="empty-cart"><p>Your bag is currently empty.</p><a href="#shop" onClick={() => setCartOpen(false)}>Explore the collection <Arrow /></a></div> : <><div className="cart-list">{cart.map((item) => <div className="cart-item" key={`${item.id}-${item.size}`}><img src={item.image} alt=""/><div><h3>{item.name}</h3><p>{money(item.price)}</p><small>Size {item.size}</small><div className="cart-qty"><button onClick={() => changeQuantity(item.id, item.size, -1)}>−</button><b>{item.quantity}</b><button onClick={() => changeQuantity(item.id, item.size, 1)}>+</button></div></div></div>)}</div><div className="checkout"><div className="delivery-progress"><span>{deliveryRemaining ? `Add ${money(deliveryRemaining)} for complimentary delivery` : 'Complimentary delivery unlocked'}</span><b>{deliveryProgress}%</b></div><div className="progress-track"><i style={{ width: `${deliveryProgress}%` }} /></div><div><span>Subtotal</span><strong>{money(subtotal)}</strong></div><button className="cta cta-dark">Proceed to checkout <Arrow /></button><small>Taxes and delivery calculated at checkout.</small></div></>}</aside></>}
+    {cartOpen && <><button className="backdrop" onClick={() => setCartOpen(false)} aria-label="Close cart"></button><aside className="cart" aria-label="Shopping bag"><div className="cart-head"><h2>Your bag</h2><button onClick={() => setCartOpen(false)}>Close</button></div>{cart.length === 0 ? <div className="empty-cart"><p>Your bag is currently empty.</p><a href="#shop" onClick={() => setCartOpen(false)}>Explore the collection <Arrow /></a></div> : <><div className="cart-list">{cart.map((item) => <div className="cart-item" key={`${item.id}-${item.size}`}><img src={item.image} alt=""/><div><h3>{item.name}</h3><p>{money(item.price)}</p><small>Size {item.size}</small><div className="cart-qty"><button onClick={() => changeQuantity(item.id, item.size, -1)}>−</button><b>{item.quantity}</b><button onClick={() => changeQuantity(item.id, item.size, 1)}>+</button></div></div></div>)}</div><div className="checkout"><div className="delivery-progress"><span>{deliveryRemaining ? `Add ${money(deliveryRemaining)} for complimentary delivery` : 'Complimentary delivery unlocked'}</span><b>{deliveryProgress}%</b></div><div className="progress-track"><i style={{ width: `${deliveryProgress}%` }} /></div><div><span>Subtotal</span><strong>{money(subtotal)}</strong></div><button className="cta cta-dark" onClick={() => void startPayment()} disabled={paymentLoading}>{paymentLoading ? "Opening secure checkout…" : "Proceed to checkout"} <Arrow /></button>{paymentMessage && <small className="payment-message" role="status">{paymentMessage}</small>}<small>Taxes and delivery calculated at checkout.</small></div></>}</aside></>}
   </div>
 }
 
