@@ -195,27 +195,110 @@ function App() {
 
   const startPayment = async () => {
     if (subtotal <= 0 || paymentLoading) return
+
+    if (!userEmail) {
+      setPaymentMessage('Please sign in before checkout.')
+      setAuthMode('signin')
+      setAuthMessage('')
+      setAuthOpen(true)
+      return
+    }
+
     setPaymentLoading(true)
     setPaymentMessage('')
+
     try {
-      const { data, error } = await supabase.functions.invoke('create-razorpay-order', { body: { amount: subtotal } })
-      if (error || !data?.orderId || !data?.keyId) throw new Error(error?.message || data?.error || 'Unable to start checkout')
-      if (!window.Razorpay) throw new Error('Payment checkout is still loading. Please try again.')
+      const { data, error } = await supabase.functions.invoke(
+        'create-razorpay-order',
+        {
+          body: {
+            items: cart.map((item) => ({
+              product_id: item.id,
+              quantity: item.quantity,
+              size: item.size,
+            })),
+          },
+        },
+      )
+
+      if (error || !data?.orderId || !data?.keyId) {
+        throw new Error(
+          error?.message ||
+          data?.error ||
+          'Unable to start checkout',
+        )
+      }
+
+      if (!window.Razorpay) {
+        throw new Error(
+          'Payment checkout is still loading. Please try again.',
+        )
+      }
+
       const checkout = new window.Razorpay({
-        key: data.keyId, amount: data.amount, currency: data.currency || 'INR', name: 'AUREN',
-        description: 'AUREN Studio order', order_id: data.orderId, prefill: userEmail ? { email: userEmail } : undefined,
+        key: data.keyId,
+        amount: data.amount,
+        currency: data.currency || 'INR',
+        name: 'AUREN',
+        description: 'AUREN Studio order',
+        order_id: data.orderId,
+        prefill: userEmail
+          ? { email: userEmail }
+          : undefined,
         theme: { color: '#171614' },
+
         handler: async (response) => {
-          const result = await supabase.functions.invoke('verify-razorpay-payment', { body: response })
-          if (result.error || !result.data?.verified) { setPaymentMessage(result.error?.message || result.data?.error || 'Payment could not be verified.'); return }
-          setCart([]); setCartOpen(false); setPaymentMessage('Payment successful. Your AUREN order is confirmed.')
+          setPaymentLoading(true)
+          setPaymentMessage('Confirming your payment…')
+
+          try {
+            const result = await supabase.functions.invoke(
+              'verify-razorpay-payment',
+              { body: response },
+            )
+
+            if (
+              result.error ||
+              !result.data?.verified
+            ) {
+              setPaymentMessage(
+                result.error?.message ||
+                result.data?.error ||
+                'Payment could not be verified.',
+              )
+              return
+            }
+
+            setCart([])
+            setCartOpen(false)
+            setPaymentMessage(
+              'Payment successful. Your AUREN order is confirmed.',
+            )
+          } catch (error) {
+            console.error(
+              'AUREN PAYMENT VERIFICATION ERROR:',
+              error,
+            )
+            setPaymentMessage(
+              'Payment received, but confirmation is still processing. Please check your account shortly.',
+            )
+          } finally {
+            setPaymentLoading(false)
+          }
         },
       })
+
       checkout.open()
     } catch (error) {
       console.error('AUREN PAYMENT ERROR:', error)
-      setPaymentMessage(error instanceof Error ? error.message : 'Unable to start payment.')
-    } finally { setPaymentLoading(false) }
+      setPaymentMessage(
+        error instanceof Error
+          ? error.message
+          : 'Unable to start payment.',
+      )
+    } finally {
+      setPaymentLoading(false)
+    }
   }
 
   const signOut = async () => {
